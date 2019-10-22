@@ -1,0 +1,5 @@
+= lsdup
+List duplicate files and directories, then optionally take action on them, all from a commandline.
+
+== Goals
+This project aims to replicate most of the functionality of https://sourceforge.net/projects/lsdup/[Java-based lsdup] but in Rust.
