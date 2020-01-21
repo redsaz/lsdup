@@ -27,10 +27,21 @@ impl BySizeFileVisitor {
 
 impl FileVisitor for BySizeFileVisitor {
     fn visit(&mut self, file: PathBuf) {
-        let size = file.metadata().expect("No metadata").len();
-        println!("File: {:?} size: {} Is it a dupe? Who knows.", file, size);
-        let paths = self.size_files_map.entry(size).or_insert_with(Vec::new);
-        paths.push(file.into_boxed_path());
+        if let Err(e) = file.metadata() {
+            eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
+            return;
+        }
+        match file.metadata() {
+            Ok(meta) => {
+                let size = meta.len();
+                eprintln!("File: {:?} size: {}", file, size);
+                let paths = self.size_files_map.entry(size).or_insert_with(Vec::new);
+                paths.push(file.into_boxed_path());
+            }
+            Err(e) => {
+                eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
+            }
+        }
     }
 }
 
@@ -67,9 +78,25 @@ impl FileVisitor for ByHashFileVisitor {
     fn visit(&mut self, file: PathBuf) {
         // Group all visited files by hash.
         let hash = hash_contents(&file);
-        println!("File: {:?} hash: {} Is it a dupe? Who knows.", file, hash.to_hex());
+        eprintln!("File: {:?} hash: {}", file, hash.to_hex());
         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
         paths.push(file.into_boxed_path());
+    }
+}
+
+impl<'a> IntoIterator for &'a ByHashFileVisitor {
+    type Item = (
+        &'a blake3::Hash,
+        &'a std::vec::Vec<std::boxed::Box<std::path::Path>>,
+    );
+    type IntoIter = std::collections::hash_map::Iter<
+        'a,
+        blake3::Hash,
+        std::vec::Vec<std::boxed::Box<std::path::Path>>,
+    >;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.hash_files_map.iter()
     }
 }
 
@@ -79,7 +106,7 @@ pub fn run(config: Config) -> io::Result<()> {
     let mut dups = BySizeFileVisitor::new();
     visit_dirs(dir, &mut dups)?;
 
-    // NOW GO THROUGH EACH ENTRY. SKIP ONES WITH ONLY ONE ITEM. HASH THE REMAINING.
+    // Go through all vecs, skipping the ones with only one entry. Hash the rest.
     let mut byhash = ByHashFileVisitor::new();
     for x in &dups {
         if x.len() < 1 {
@@ -94,9 +121,16 @@ pub fn run(config: Config) -> io::Result<()> {
     // THEN GO THROUGH *THOSE* ENTRIES. SKIP ONES WITH ONLY ONE ITEM. WHAT REMAINS ARE DUPES.
     // ORDER THEM AS APPROPRIATE AND OUTPUT THE RESULTS.
 
-    // for line in results {
-    //     println!("{}", line);
-    // }
+    for x in &byhash {
+        if x.1.len() < 1 {
+            continue;
+        }
+
+        println!("\nHash: {}", x.0.to_hex());
+        for y in x.1 {
+            println!("{}", y.to_str().unwrap_or("<unprintable>"));
+        }
+    }
 
     Ok(())
 }
@@ -117,11 +151,11 @@ fn hash_contents(file: &PathBuf) -> Hash {
 }
 
 fn print_file_info(file: &fs::DirEntry) {
-    println!(
-        "File: {:?} size: {}",
-        file.path(),
-        file.metadata().expect("No metadata").len()
-    );
+    let size = match file.metadata() {
+        Ok(n) => n.len().to_string(),
+        Err(..) => "No metadata".to_string(),
+    };
+    eprintln!("File: {:?} size: {}", file.path(), size);
 }
 
 fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) -> io::Result<()> {
@@ -182,7 +216,7 @@ mod tests {
         let mut dup1b = File::create(dir.join("dup1b.txt")).unwrap();
         dup1b.write_all(contents1).unwrap();
 
-        // visit_dirs(dir, &|file| println!("File: {:?} size: {}", file.path(), file.metadata().expect("No metadata").len())).unwrap();
+        // visit_dirs(dir, &|file| eprintln!("File: {:?} size: {}", file.path(), file.metadata().expect("No metadata").len())).unwrap();
 
         let mut out = File::open(dir.join("dup1a.txt")).unwrap();
         let mut buf = [0; 128 * 1024];
@@ -197,7 +231,7 @@ mod tests {
         let hash1 = hasher.finalize();
 
         // let hash1 = blake3::hash(b"foobarbaz");
-        println!("hex: {}", hash1.to_hex());
+        eprintln!("hex: {}", hash1.to_hex());
         assert_eq!(
             "fcc85134f1e140988a686dbd857f9dcf453cfbfc986f0fcfbb987a0436a1cd42",
             hash1.to_hex().as_str()
