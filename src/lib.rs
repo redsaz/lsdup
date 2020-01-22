@@ -104,10 +104,12 @@ pub fn run(config: Config) -> io::Result<()> {
     // let contents = fs::read_to_string(config.filename)?;
     let dir = Path::new(&config.dir);
     let mut dups = BySizeFileVisitor::new();
-    visit_dirs(dir, &mut dups)?;
+    eprintln!("Gathering files by filesize for {:?}...", dir);
+    visit_dirs(dir, &mut dups);
 
     // Go through all vecs, skipping the ones with only one entry. Hash the rest.
     let mut byhash = ByHashFileVisitor::new();
+    eprintln!("\nGathering files by hash for {:?}...", dir);
     for x in &dups {
         if x.len() < 1 {
             continue;
@@ -158,20 +160,36 @@ fn print_file_info(file: &fs::DirEntry) {
     eprintln!("File: {:?} size: {}", file.path(), size);
 }
 
-fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) -> io::Result<()> {
+fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) {
     if dir.is_dir() {
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            let metadata = entry.metadata()?;
-            if path.is_dir() && metadata.is_dir() {
-                visit_dirs(&path, visitor)?;
-            } else {
-                visitor.visit(path);
+        match fs::read_dir(dir) {
+            Ok(dir_iter) => {
+                for entry in dir_iter {
+                    match entry {
+                        Ok(entry) => {
+                            let path = entry.path();
+                            match entry.metadata() {
+                                Ok(metadata) => {
+                                    if path.is_dir() && metadata.is_dir() {
+                                        visit_dirs(&path, visitor);
+                                    } else {
+                                        visitor.visit(path);
+                                    }
+                                }
+                                Err(e) => eprintln!("Skipping {:?}.\nReason: {}", entry, e),
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Skipping entry in directory {:?}.\nReason: {}", dir, e)
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("Skipping directory {:?}.\nReason: {}", dir, e);
             }
         }
     }
-    Ok(())
 }
 
 pub struct Config {
