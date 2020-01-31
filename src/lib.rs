@@ -8,6 +8,8 @@ use std::io::prelude::*;
 use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
+use memmap::MmapOptions;
+
 
 trait FileVisitor {
     fn visit(&mut self, file: PathBuf);
@@ -77,8 +79,9 @@ impl ByHashFileVisitor {
 impl FileVisitor for ByHashFileVisitor {
     fn visit(&mut self, file: PathBuf) {
         // Group all visited files by hash.
+        eprintln!("File: {:?} size: {}", file, file.metadata().unwrap().len());
         let hash = hash_contents(&file);
-        eprintln!("File: {:?} hash: {}", file, hash.to_hex());
+        eprintln!("\thash: {}", hash.to_hex());
         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
         paths.push(file.into_boxed_path());
     }
@@ -111,9 +114,11 @@ pub fn run(config: Config) -> io::Result<()> {
     let mut byhash = ByHashFileVisitor::new();
     eprintln!("\nGathering files by hash for {:?}...", dir);
     for x in &dups {
-        if x.len() < 1 {
+        if x.len() < 2 {
             continue;
         }
+
+        eprintln!("Group of {} files.", x.len());
 
         for y in x {
             byhash.visit(y.to_path_buf());
@@ -124,7 +129,7 @@ pub fn run(config: Config) -> io::Result<()> {
     // ORDER THEM AS APPROPRIATE AND OUTPUT THE RESULTS.
 
     for x in &byhash {
-        if x.1.len() < 1 {
+        if x.1.len() < 2 {
             continue;
         }
 
@@ -138,16 +143,29 @@ pub fn run(config: Config) -> io::Result<()> {
 }
 
 fn hash_contents(file: &PathBuf) -> Hash {
-    let mut out = File::open(file).unwrap();
-    let mut buf = [0; 128 * 1024];
-    let mut hasher = blake3::Hasher::new();
-    loop {
-        let length = out.read(&mut buf).unwrap();
-        if length == 0 {
-            break;
-        }
-        hasher.update(&buf);
+    let file = File::open(file).expect("Could not open file for reading.");
+    let size = file.metadata().expect("Could not get file size.").len();
+
+    if size >= 16384 && size <= isize::max_value() as u64 {
+        hash_contents_mmap(&file)
+    } else {
+        hash_contents_file(file)
     }
+}
+
+fn hash_contents_file(file: File) -> Hash {
+    let mut file = file;
+    let mut hasher = blake3::Hasher::new();
+    std::io::copy(&mut file, &mut hasher).expect("Could not hash file contents.");
+
+    hasher.finalize()
+}
+
+fn hash_contents_mmap(file: &File) -> Hash {
+    let mmap = unsafe { MmapOptions::new().map(&file).expect("Could not memmap file.") };
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&mmap);
 
     hasher.finalize()
 }
@@ -172,8 +190,10 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) {
                                 Ok(metadata) => {
                                     if path.is_dir() && metadata.is_dir() {
                                         visit_dirs(&path, visitor);
-                                    } else {
+                                    } else if metadata.is_file() {
                                         visitor.visit(path);
+                                    } else {
+                                        eprintln!("I'm not sure what this is: {:?}", path);
                                     }
                                 }
                                 Err(e) => eprintln!("Skipping {:?}.\nReason: {}", entry, e),
