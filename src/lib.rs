@@ -1,15 +1,43 @@
-use blake3::Hash;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::io::prelude::*;
 use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
+use arrayvec::ArrayString;
 use memmap::MmapOptions;
 
+#[derive(std::hash::Hash,std::cmp::Eq,std::cmp::PartialEq)]
+struct LenHash {
+    len: u64,
+    hash: [u8; 32]
+}
+
+impl LenHash {
+    pub fn from(len: u64, hash: [u8; 32]) -> LenHash {
+        LenHash {
+            len,
+            hash
+        }
+    }
+
+    pub fn len(&self) -> u64 {
+        self.len
+    }
+
+    pub fn to_hex(&self) -> ArrayString<[u8; 32 * 2]> {
+        // As done in Blake3 to_hex function.
+        let mut s = ArrayString::new();
+        let table = b"0123456789abcdef";
+        for &b in self.hash.iter() {
+            s.push(table[(b >> 4) as usize] as char);
+            s.push(table[(b & 0xf) as usize] as char);
+        }
+        s
+    }
+}
 
 trait FileVisitor {
     fn visit(&mut self, file: PathBuf);
@@ -65,7 +93,7 @@ impl<'a> IntoIterator for &'a BySizeFileVisitor {
 }
 
 struct ByHashFileVisitor {
-    hash_files_map: HashMap<Hash, Vec<Box<Path>>>,
+    hash_files_map: HashMap<LenHash, Vec<Box<Path>>>,
 }
 
 impl ByHashFileVisitor {
@@ -89,12 +117,12 @@ impl FileVisitor for ByHashFileVisitor {
 
 impl<'a> IntoIterator for &'a ByHashFileVisitor {
     type Item = (
-        &'a blake3::Hash,
+        &'a LenHash,
         &'a std::vec::Vec<std::boxed::Box<std::path::Path>>,
     );
     type IntoIter = std::collections::hash_map::Iter<
         'a,
-        blake3::Hash,
+        LenHash,
         std::vec::Vec<std::boxed::Box<std::path::Path>>,
     >;
 
@@ -133,41 +161,41 @@ pub fn run(config: Config) -> io::Result<()> {
             continue;
         }
 
-        println!("\nHash: {}", x.0.to_hex());
+        println!("\nSize: {}  Hash: {}", x.0.len(), x.0.to_hex());
         for y in x.1 {
-            println!("{}", y.to_str().unwrap_or("<unprintable>"));
+            println!("{}", y.to_string_lossy());
         }
     }
 
     Ok(())
 }
 
-fn hash_contents(file: &PathBuf) -> Hash {
+fn hash_contents(file: &PathBuf) -> LenHash {
     let file = File::open(file).expect("Could not open file for reading.");
     let size = file.metadata().expect("Could not get file size.").len();
 
     if size >= 16384 && size <= isize::max_value() as u64 {
-        hash_contents_mmap(&file)
+        hash_contents_mmap(size, &file)
     } else {
-        hash_contents_file(file)
+        hash_contents_file(size, file)
     }
 }
 
-fn hash_contents_file(file: File) -> Hash {
+fn hash_contents_file(size: u64, file: File) -> LenHash {
     let mut file = file;
     let mut hasher = blake3::Hasher::new();
     std::io::copy(&mut file, &mut hasher).expect("Could not hash file contents.");
 
-    hasher.finalize()
+    LenHash::from(size, hasher.finalize().into())
 }
 
-fn hash_contents_mmap(file: &File) -> Hash {
+fn hash_contents_mmap(size: u64, file: &File) -> LenHash {
     let mmap = unsafe { MmapOptions::new().map(&file).expect("Could not memmap file.") };
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(&mmap);
 
-    hasher.finalize()
+    LenHash::from(size, hasher.finalize().into())
 }
 
 fn print_file_info(file: &fs::DirEntry) {
@@ -232,6 +260,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::prelude::*;
 
     #[test]
     fn visit_dirs_test_dir() {
