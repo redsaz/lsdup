@@ -1,3 +1,5 @@
+use arrayvec::ArrayString;
+use memmap::MmapOptions;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -6,21 +8,16 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
-use arrayvec::ArrayString;
-use memmap::MmapOptions;
 
-#[derive(std::hash::Hash,std::cmp::Eq,std::cmp::PartialEq)]
+#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq)]
 struct LenHash {
     len: u64,
-    hash: [u8; 32]
+    hash: [u8; 32],
 }
 
 impl LenHash {
     pub fn from(len: u64, hash: [u8; 32]) -> LenHash {
-        LenHash {
-            len,
-            hash
-        }
+        LenHash { len, hash }
     }
 
     pub fn len(&self) -> u64 {
@@ -43,19 +40,28 @@ trait FileVisitor {
     fn visit(&mut self, file: PathBuf);
 }
 
-struct BySizeFileVisitor {
-    size_files_map: HashMap<u64, Vec<Box<Path>>>,
+struct AllInFileVisitor {
+    // The first file for the size is stored here. If another file with
+    // the same size comes along, then the first file will get hashed,
+    // And the Some is replaced with None. Then the second file is hashed.
+    // Any later files will get hashed.
+    size_firstfile_map: HashMap<u64, Option<PathBuf>>,
+
+    // If there are two or more files of a given size found, then they
+    // will be hashed and placed in this map.
+    hash_files_map: HashMap<LenHash, Vec<PathBuf>>,
 }
 
-impl BySizeFileVisitor {
-    fn new() -> BySizeFileVisitor {
-        BySizeFileVisitor {
-            size_files_map: HashMap::new(),
+impl AllInFileVisitor {
+    fn new() -> AllInFileVisitor {
+        AllInFileVisitor {
+            size_firstfile_map: HashMap::new(),
+            hash_files_map: HashMap::new(),
         }
     }
 }
 
-impl FileVisitor for BySizeFileVisitor {
+impl FileVisitor for AllInFileVisitor {
     fn visit(&mut self, file: PathBuf) {
         if let Err(e) = file.metadata() {
             eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
@@ -64,9 +70,32 @@ impl FileVisitor for BySizeFileVisitor {
         match file.metadata() {
             Ok(meta) => {
                 let size = meta.len();
+                // let mut just_inserted = false;
                 eprintln!("File: {:?} size: {}", file, size);
-                let paths = self.size_files_map.entry(size).or_insert_with(Vec::new);
-                paths.push(file.into_boxed_path());
+                let e = self.size_firstfile_map.get(&size);
+                // If there is already an entry for the given size...
+                if let Some(inner_opt) = e {
+                    // ...and there is already a file with the given byte size, then hash that file
+                    // first, before hashing the current file.
+                    if let Some(original) = inner_opt {
+                        let hash = hash_contents_path(&original);
+                        eprintln!("\thash: {}", hash.to_hex());
+                        let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
+                        paths.push(original.clone());
+                        // (and replace the Some with None, so it won't be hashed again)
+                        self.size_firstfile_map.insert(size, None);
+                    }
+                    // ...now hash the current file.
+                    let hash = hash_contents_path(&file);
+                    eprintln!("\thash: {}", hash.to_hex());
+                    let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
+                    paths.push(file);
+                } else {
+                    // Since there isn't an entry for the given size, that means this is the first
+                    // file with that size. Put it in the size map so that if another file with the
+                    // same size is encountered, it can be hashed too.
+                    self.size_firstfile_map.insert(size, Some(file));
+                }
             }
             Err(e) => {
                 eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
@@ -75,55 +104,15 @@ impl FileVisitor for BySizeFileVisitor {
     }
 }
 
-// impl IntoIterator for BySizeFileVisitor {
-//     type Item = Box<PathBuf>;
-//     type IntoIter = std::iter::Flatten<Self::Item>;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.size_files_map.values().filter(|v| v.len() > 1).flatten()
-//     }
-// }
-impl<'a> IntoIterator for &'a BySizeFileVisitor {
-    type Item = &'a Vec<Box<Path>>;
-    type IntoIter = std::collections::hash_map::Values<'a, u64, Vec<Box<Path>>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.size_files_map.values()
-    }
-}
-
-struct ByHashFileVisitor {
-    hash_files_map: HashMap<LenHash, Vec<Box<Path>>>,
-}
-
-impl ByHashFileVisitor {
-    fn new() -> ByHashFileVisitor {
-        ByHashFileVisitor {
-            hash_files_map: HashMap::new(),
-        }
-    }
-}
-
-impl FileVisitor for ByHashFileVisitor {
-    fn visit(&mut self, file: PathBuf) {
-        // Group all visited files by hash.
-        eprintln!("File: {:?} size: {}", file, file.metadata().unwrap().len());
-        let hash = hash_contents(&file);
-        eprintln!("\thash: {}", hash.to_hex());
-        let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
-        paths.push(file.into_boxed_path());
-    }
-}
-
-impl<'a> IntoIterator for &'a ByHashFileVisitor {
+impl<'a> IntoIterator for &'a AllInFileVisitor {
     type Item = (
         &'a LenHash,
-        &'a std::vec::Vec<std::boxed::Box<std::path::Path>>,
+        &'a std::vec::Vec<PathBuf>,
     );
     type IntoIter = std::collections::hash_map::Iter<
         'a,
         LenHash,
-        std::vec::Vec<std::boxed::Box<std::path::Path>>,
+        std::vec::Vec<PathBuf>,
     >;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -131,32 +120,94 @@ impl<'a> IntoIterator for &'a ByHashFileVisitor {
     }
 }
 
+// struct BySizeFileVisitor {
+//     size_files_map: HashMap<u64, Vec<Box<Path>>>,
+// }
+
+// impl BySizeFileVisitor {
+//     fn new() -> BySizeFileVisitor {
+//         BySizeFileVisitor {
+//             size_files_map: HashMap::new(),
+//         }
+//     }
+// }
+
+// impl FileVisitor for BySizeFileVisitor {
+//     fn visit(&mut self, file: PathBuf) {
+//         if let Err(e) = file.metadata() {
+//             eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
+//             return;
+//         }
+//         match file.metadata() {
+//             Ok(meta) => {
+//                 let size = meta.len();
+//                 eprintln!("File: {:?} size: {}", file, size);
+//                 let paths = self.size_files_map.entry(size).or_insert_with(Vec::new);
+//                 paths.push(file.into_boxed_path());
+//             }
+//             Err(e) => {
+//                 eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
+//             }
+//         }
+//     }
+// }
+
+// impl<'a> IntoIterator for &'a BySizeFileVisitor {
+//     type Item = &'a Vec<Box<Path>>;
+//     type IntoIter = std::collections::hash_map::Values<'a, u64, Vec<Box<Path>>>;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.size_files_map.values()
+//     }
+// }
+
+// struct ByHashFileVisitor {
+//     hash_files_map: HashMap<LenHash, Vec<Box<Path>>>,
+// }
+
+// impl ByHashFileVisitor {
+//     fn new() -> ByHashFileVisitor {
+//         ByHashFileVisitor {
+//             hash_files_map: HashMap::new(),
+//         }
+//     }
+// }
+
+// impl FileVisitor for ByHashFileVisitor {
+//     fn visit(&mut self, file: PathBuf) {
+//         // Group all visited files by hash.
+//         eprintln!("File: {:?} size: {}", file, file.metadata().unwrap().len());
+//         let hash = hash_contents(&file);
+//         eprintln!("\thash: {}", hash.to_hex());
+//         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
+//         paths.push(file.into_boxed_path());
+//     }
+// }
+
+// impl<'a> IntoIterator for &'a ByHashFileVisitor {
+//     type Item = (
+//         &'a LenHash,
+//         &'a std::vec::Vec<std::boxed::Box<std::path::Path>>,
+//     );
+//     type IntoIter = std::collections::hash_map::Iter<
+//         'a,
+//         LenHash,
+//         std::vec::Vec<std::boxed::Box<std::path::Path>>,
+//     >;
+
+//     fn into_iter(self) -> Self::IntoIter {
+//         self.hash_files_map.iter()
+//     }
+// }
+
 pub fn run(config: Config) -> io::Result<()> {
-    // let contents = fs::read_to_string(config.filename)?;
     let dir = Path::new(&config.dir);
-    let mut dups = BySizeFileVisitor::new();
-    eprintln!("Gathering files by filesize for {:?}...", dir);
+    let mut dups = AllInFileVisitor::new();
+    eprintln!("Analyzing for {:?}...", dir);
     visit_dirs(dir, &mut dups);
 
-    // Go through all vecs, skipping the ones with only one entry. Hash the rest.
-    let mut byhash = ByHashFileVisitor::new();
-    eprintln!("\nGathering files by hash for {:?}...", dir);
+    // Iterate through all of the hashed files map, return only the ones that have two or more.
     for x in &dups {
-        if x.len() < 2 {
-            continue;
-        }
-
-        eprintln!("Group of {} files.", x.len());
-
-        for y in x {
-            byhash.visit(y.to_path_buf());
-        }
-    }
-
-    // THEN GO THROUGH *THOSE* ENTRIES. SKIP ONES WITH ONLY ONE ITEM. WHAT REMAINS ARE DUPES.
-    // ORDER THEM AS APPROPRIATE AND OUTPUT THE RESULTS.
-
-    for x in &byhash {
         if x.1.len() < 2 {
             continue;
         }
@@ -181,6 +232,17 @@ fn hash_contents(file: &PathBuf) -> LenHash {
     }
 }
 
+fn hash_contents_path(file: &Path) -> LenHash {
+    let file = File::open(file).expect("Could not open file for reading.");
+    let size = file.metadata().expect("Could not get file size.").len();
+
+    if size >= 16384 && size <= isize::max_value() as u64 {
+        hash_contents_mmap(size, &file)
+    } else {
+        hash_contents_file(size, file)
+    }
+}
+
 fn hash_contents_file(size: u64, file: File) -> LenHash {
     let mut file = file;
     let mut hasher = blake3::Hasher::new();
@@ -190,7 +252,11 @@ fn hash_contents_file(size: u64, file: File) -> LenHash {
 }
 
 fn hash_contents_mmap(size: u64, file: &File) -> LenHash {
-    let mmap = unsafe { MmapOptions::new().map(&file).expect("Could not memmap file.") };
+    let mmap = unsafe {
+        MmapOptions::new()
+            .map(&file)
+            .expect("Could not memmap file.")
+    };
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(&mmap);
