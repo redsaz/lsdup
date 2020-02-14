@@ -1,6 +1,6 @@
 use arrayvec::ArrayString;
 use memmap::MmapOptions;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::fs::File;
@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
 
-#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq)]
+#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::cmp::Ord, std::cmp::PartialOrd)]
 struct LenHash {
     len: u64,
     hash: [u8; 32],
@@ -45,18 +45,18 @@ struct AllInFileVisitor {
     // the same size comes along, then the first file will get hashed,
     // And the Some is replaced with None. Then the second file is hashed.
     // Any later files will get hashed.
-    size_firstfile_map: HashMap<u64, Option<PathBuf>>,
+    size_firstfile_map: BTreeMap<u64, Option<PathBuf>>,
 
     // If there are two or more files of a given size found, then they
     // will be hashed and placed in this map.
-    hash_files_map: HashMap<LenHash, Vec<PathBuf>>,
+    hash_files_map: BTreeMap<LenHash, Vec<PathBuf>>,
 }
 
 impl AllInFileVisitor {
     fn new() -> AllInFileVisitor {
         AllInFileVisitor {
-            size_firstfile_map: HashMap::new(),
-            hash_files_map: HashMap::new(),
+            size_firstfile_map: BTreeMap::new(),
+            hash_files_map: BTreeMap::new(),
         }
     }
 }
@@ -109,7 +109,7 @@ impl<'a> IntoIterator for &'a AllInFileVisitor {
         &'a LenHash,
         &'a std::vec::Vec<PathBuf>,
     );
-    type IntoIter = std::collections::hash_map::Iter<
+    type IntoIter = std::collections::btree_map::Iter<
         'a,
         LenHash,
         std::vec::Vec<PathBuf>,
