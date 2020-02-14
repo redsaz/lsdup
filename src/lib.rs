@@ -120,86 +120,6 @@ impl<'a> IntoIterator for &'a AllInFileVisitor {
     }
 }
 
-// struct BySizeFileVisitor {
-//     size_files_map: HashMap<u64, Vec<Box<Path>>>,
-// }
-
-// impl BySizeFileVisitor {
-//     fn new() -> BySizeFileVisitor {
-//         BySizeFileVisitor {
-//             size_files_map: HashMap::new(),
-//         }
-//     }
-// }
-
-// impl FileVisitor for BySizeFileVisitor {
-//     fn visit(&mut self, file: PathBuf) {
-//         if let Err(e) = file.metadata() {
-//             eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
-//             return;
-//         }
-//         match file.metadata() {
-//             Ok(meta) => {
-//                 let size = meta.len();
-//                 eprintln!("File: {:?} size: {}", file, size);
-//                 let paths = self.size_files_map.entry(size).or_insert_with(Vec::new);
-//                 paths.push(file.into_boxed_path());
-//             }
-//             Err(e) => {
-//                 eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
-//             }
-//         }
-//     }
-// }
-
-// impl<'a> IntoIterator for &'a BySizeFileVisitor {
-//     type Item = &'a Vec<Box<Path>>;
-//     type IntoIter = std::collections::hash_map::Values<'a, u64, Vec<Box<Path>>>;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.size_files_map.values()
-//     }
-// }
-
-// struct ByHashFileVisitor {
-//     hash_files_map: HashMap<LenHash, Vec<Box<Path>>>,
-// }
-
-// impl ByHashFileVisitor {
-//     fn new() -> ByHashFileVisitor {
-//         ByHashFileVisitor {
-//             hash_files_map: HashMap::new(),
-//         }
-//     }
-// }
-
-// impl FileVisitor for ByHashFileVisitor {
-//     fn visit(&mut self, file: PathBuf) {
-//         // Group all visited files by hash.
-//         eprintln!("File: {:?} size: {}", file, file.metadata().unwrap().len());
-//         let hash = hash_contents(&file);
-//         eprintln!("\thash: {}", hash.to_hex());
-//         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
-//         paths.push(file.into_boxed_path());
-//     }
-// }
-
-// impl<'a> IntoIterator for &'a ByHashFileVisitor {
-//     type Item = (
-//         &'a LenHash,
-//         &'a std::vec::Vec<std::boxed::Box<std::path::Path>>,
-//     );
-//     type IntoIter = std::collections::hash_map::Iter<
-//         'a,
-//         LenHash,
-//         std::vec::Vec<std::boxed::Box<std::path::Path>>,
-//     >;
-
-//     fn into_iter(self) -> Self::IntoIter {
-//         self.hash_files_map.iter()
-//     }
-// }
-
 pub fn run(config: Config) -> io::Result<()> {
     let dir = Path::new(&config.dir);
     let mut dups = AllInFileVisitor::new();
@@ -219,17 +139,6 @@ pub fn run(config: Config) -> io::Result<()> {
     }
 
     Ok(())
-}
-
-fn hash_contents(file: &PathBuf) -> LenHash {
-    let file = File::open(file).expect("Could not open file for reading.");
-    let size = file.metadata().expect("Could not get file size.").len();
-
-    if size >= 16384 && size <= isize::max_value() as u64 {
-        hash_contents_mmap(size, &file)
-    } else {
-        hash_contents_file(size, file)
-    }
 }
 
 fn hash_contents_path(file: &Path) -> LenHash {
@@ -262,14 +171,6 @@ fn hash_contents_mmap(size: u64, file: &File) -> LenHash {
     hasher.update(&mmap);
 
     LenHash::from(size, hasher.finalize().into())
-}
-
-fn print_file_info(file: &fs::DirEntry) {
-    let size = match file.metadata() {
-        Ok(n) => n.len().to_string(),
-        Err(..) => "No metadata".to_string(),
-    };
-    eprintln!("File: {:?} size: {}", file.path(), size);
 }
 
 fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) {
@@ -348,8 +249,6 @@ mod tests {
         dup1a.write_all(contents1).unwrap();
         let mut dup1b = File::create(dir.join("dup1b.txt")).unwrap();
         dup1b.write_all(contents1).unwrap();
-
-        // visit_dirs(dir, &|file| eprintln!("File: {:?} size: {}", file.path(), file.metadata().expect("No metadata").len())).unwrap();
 
         let mut out = File::open(dir.join("dup1a.txt")).unwrap();
         let mut buf = [0; 128 * 1024];
