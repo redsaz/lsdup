@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
 
-#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::cmp::Ord, std::cmp::PartialOrd)]
+#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq)]
 struct LenHash {
     len: u64,
     hash: [u8; 32],
@@ -33,6 +33,20 @@ impl LenHash {
             s.push(table[(b & 0xf) as usize] as char);
         }
         s
+    }
+}
+
+impl Ord for LenHash {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare other with self, instead of self with other,
+        // so the ordering becomes largest-to-smallest
+        other.len.cmp(&self.len).then_with(|| other.hash.cmp(&self.hash))
+    }
+}
+
+impl PartialOrd for LenHash {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
