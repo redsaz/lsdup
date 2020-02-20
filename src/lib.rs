@@ -5,6 +5,7 @@ use std::env;
 use std::fs;
 use std::fs::File;
 use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
@@ -40,13 +41,48 @@ impl Ord for LenHash {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Compare other with self, instead of self with other,
         // so the ordering becomes largest-to-smallest
-        other.len.cmp(&self.len).then_with(|| other.hash.cmp(&self.hash))
+        other
+            .len
+            .cmp(&self.len)
+            .then_with(|| other.hash.cmp(&self.hash))
     }
 }
 
 impl PartialOrd for LenHash {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
+    }
+}
+
+// Device+Inode number are used to identify hard linked data.
+#[derive(
+    std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::cmp::Ord, std::cmp::PartialOrd,
+)]
+struct DevIno {
+    dev: u64,
+    ino: u64,
+}
+
+impl DevIno {
+    pub fn from(meta: &dyn std::os::unix::fs::MetadataExt) -> DevIno {
+        let dev = meta.dev();
+        let ino = meta.ino();
+        DevIno { dev, ino }
+    }
+}
+
+// len, hash, and first file.
+struct LinkedFile {
+    len: u64,
+    hash: Option<[u8; 32]>,
+    first: Option<PathBuf>,
+}
+
+impl LinkedFile {
+    pub fn init(len: u64, first: PathBuf) -> LinkedFile {
+        let hash = None;
+        let first = Some(first);
+        LinkedFile { len, hash, first }
     }
 }
 
@@ -64,6 +100,12 @@ struct AllInFileVisitor {
     // If there are two or more files of a given size found, then they
     // will be hashed and placed in this map.
     hash_files_map: BTreeMap<LenHash, Vec<PathBuf>>,
+
+    // Files that are hardlinked are treated specially, because the user
+    // usually (unless an option is set otherwise) doesn't want to consider
+    // hardlinks as duplicate. Also we don't want to hash two or more times
+    // if we know its all pointing to the same data.
+    hardlinks_map: BTreeMap<DevIno, LinkedFile>,
 }
 
 impl AllInFileVisitor {
@@ -71,6 +113,7 @@ impl AllInFileVisitor {
         AllInFileVisitor {
             size_firstfile_map: BTreeMap::new(),
             hash_files_map: BTreeMap::new(),
+            hardlinks_map: BTreeMap::new(),
         }
     }
 }
@@ -84,8 +127,41 @@ impl FileVisitor for AllInFileVisitor {
         match file.metadata() {
             Ok(meta) => {
                 let size = meta.len();
-                // let mut just_inserted = false;
+
                 eprintln!("File: {:?} size: {}", file, size);
+
+                // If the inode that the file points at has at least one other file
+                // pointing at it, we should treat it special so that we don't hash
+                // the same data twice.
+                if has_hardlinks(&meta) {
+                    let inode = DevIno::from(&meta);
+                    let e = self.hardlinks_map.get_mut(&inode);
+                    // If there is already an entry for the dev+inode, then toss or
+                    // calculate hash, according to CLI option
+                    if let Some(files) = e {
+                        // TODO Right now there is no CLI option to list hard links as
+                        // dupes. So we toss it.
+                        // I think something like this?
+                        // if list_hardlinks_as_dupes {
+                        //     if let Some(first) = hlink.first {
+                        //         let hash = hash_contents_path(&first);
+                        //         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
+                        //         paths.push(first)
+                        //         hlink.first = None;
+                        //         hlink.hash = hash;
+                        //     } else {
+                        //         let paths = self.hash_files_map.entry(hlink.hash)
+                        //         paths.push(file);
+                        //     }
+                        // }
+                        return;
+                    } else {
+                        let len = meta.len();
+                        let files = LinkedFile::init(len, file.to_owned());
+                        self.hardlinks_map.insert(inode, files);
+                    }
+                }
+
                 let e = self.size_firstfile_map.get(&size);
                 // If there is already an entry for the given size...
                 if let Some(inner_opt) = e {
@@ -119,15 +195,8 @@ impl FileVisitor for AllInFileVisitor {
 }
 
 impl<'a> IntoIterator for &'a AllInFileVisitor {
-    type Item = (
-        &'a LenHash,
-        &'a std::vec::Vec<PathBuf>,
-    );
-    type IntoIter = std::collections::btree_map::Iter<
-        'a,
-        LenHash,
-        std::vec::Vec<PathBuf>,
-    >;
+    type Item = (&'a LenHash, &'a std::vec::Vec<PathBuf>);
+    type IntoIter = std::collections::btree_map::Iter<'a, LenHash, std::vec::Vec<PathBuf>>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.hash_files_map.iter()
@@ -153,6 +222,11 @@ pub fn run(config: Config) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+// If this file is a hardlink, then return true.
+fn has_hardlinks(meta: &dyn std::os::unix::fs::MetadataExt) -> bool {
+    meta.nlink() > 1
 }
 
 fn hash_contents_path(file: &Path) -> LenHash {
@@ -242,45 +316,58 @@ impl Config {
 mod tests {
     use super::*;
     use std::io::prelude::*;
+    use std::os::unix::fs::MetadataExt;
 
     #[test]
     fn visit_dirs_test_dir() {
-        let dir = Path::new("./target/test_dir");
-        std::fs::remove_dir_all(dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::NotFound {
-                panic!("Problem removing old directory: {:?}", error);
-            }
-        });
+        // let dir = Path::new("./target/test_dir");
+        // std::fs::remove_dir_all(dir).unwrap_or_else(|error| {
+        //     if error.kind() != io::ErrorKind::NotFound {
+        //         panic!("Problem removing old directory: {:?}", error);
+        //     }
+        // });
 
-        std::fs::create_dir(dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                panic!("Problem creating directory: {:?}", error);
-            }
-        });
+        // std::fs::create_dir(dir).unwrap_or_else(|error| {
+        //     if error.kind() != io::ErrorKind::AlreadyExists {
+        //         panic!("Problem creating directory: {:?}", error);
+        //     }
+        // });
 
-        let contents1 = b"Contents1";
-        let mut dup1a = File::create(dir.join("dup1a.txt")).unwrap();
-        dup1a.write_all(contents1).unwrap();
-        let mut dup1b = File::create(dir.join("dup1b.txt")).unwrap();
-        dup1b.write_all(contents1).unwrap();
+        // let contents1 = b"Contents1";
+        // let mut dup1a = File::create(dir.join("dup1a.txt")).unwrap();
+        // dup1a.write_all(contents1).unwrap();
+        // let mut dup1b = File::create(dir.join("dup1b.txt")).unwrap();
+        // dup1b.write_all(contents1).unwrap();
 
-        let mut out = File::open(dir.join("dup1a.txt")).unwrap();
-        let mut buf = [0; 128 * 1024];
-        let mut hasher = blake3::Hasher::new();
-        loop {
-            let length = out.read(&mut buf).unwrap();
-            if length == 0 {
-                break;
-            }
-            hasher.update(&buf);
-        }
-        let hash1 = hasher.finalize();
+        // let mut out = File::open(dir.join("dup1a.txt")).unwrap();
+        // let mut buf = [0; 128 * 1024];
+        // let mut hasher = blake3::Hasher::new();
+        // loop {
+        //     let length = out.read(&mut buf).unwrap();
+        //     if length == 0 {
+        //         break;
+        //     }
+        //     hasher.update(&buf);
+        // }
+        // let hash1 = hasher.finalize();
 
-        // let hash1 = blake3::hash(b"foobarbaz");
-        eprintln!("hex: {}", hash1.to_hex());
-        assert_eq!(
-            "fcc85134f1e140988a686dbd857f9dcf453cfbfc986f0fcfbb987a0436a1cd42",
-            hash1.to_hex().as_str()
-        );
+        // // let hash1 = blake3::hash(b"foobarbaz");
+        // eprintln!("hex: {}", hash1.to_hex());
+        // assert_eq!(
+        //     "fcc85134f1e140988a686dbd857f9dcf453cfbfc986f0fcfbb987a0436a1cd42",
+        //     hash1.to_hex().as_str()
+        // );
+    }
+
+    #[test]
+    fn hard_link() {
+        // let dir = Path::new("./target/test_dir");
+
+        // let dup1a = dir.join(Path::new("dup1a.txt"));
+        // let inode = dup1a.metadata().unwrap().ino();
+        // eprintln!("inode: {}", inode);
+        // let dup1a_hlink = dir.join(Path::new("dup1a-hardlink.txt"));
+        // let inode = dup1a_hlink.metadata().unwrap().ino();
+        // eprintln!("inode: {}", inode);
     }
 }
