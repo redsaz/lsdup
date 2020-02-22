@@ -5,7 +5,6 @@ use std::env;
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
@@ -203,7 +202,7 @@ impl<'a> IntoIterator for &'a AllInFileVisitor {
     }
 }
 
-pub fn run(config: Config) -> io::Result<()> {
+pub fn run(config: &Config) -> io::Result<()> {
     let dir = Path::new(&config.dir);
     let mut dups = AllInFileVisitor::new();
     eprintln!("Analyzing for {:?}...", dir);
@@ -361,13 +360,36 @@ mod tests {
 
     #[test]
     fn hard_link() {
-        // let dir = Path::new("./target/test_dir");
+        // Given a directory with two files,
+        // and one file has original data,
+        let target_dir = Path::new("./target/test_dir/hard_links");
+        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                panic!("Problem creating directory: {:?}", error);
+            }
+        });
 
-        // let dup1a = dir.join(Path::new("dup1a.txt"));
-        // let inode = dup1a.metadata().unwrap().ino();
-        // eprintln!("inode: {}", inode);
-        // let dup1a_hlink = dir.join(Path::new("dup1a-hardlink.txt"));
-        // let inode = dup1a_hlink.metadata().unwrap().ino();
-        // eprintln!("inode: {}", inode);
+        let orig_path = target_dir.join(Path::new("a.txt"));
+        {
+        let mut original = File::create(&orig_path).unwrap();
+        original.write_all(b"Contents for non-duplicated data. kjhkjh").expect("Could not write data for file.");
+        }
+
+        // and another file is hardlinked to that data,
+        let hlink_path = target_dir.join(Path::new("a-hardlink.txt"));
+        std::fs::hard_link(&orig_path, &hlink_path).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                panic!("Problem creating hardlink: {:?}", error);
+            }
+        });
+
+        // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
+        let config = Config{dir: target_dir.to_string_lossy().to_string() };
+
+        // When dupes are analyzed for that directory,
+        run(&config).expect("Could not analyze directory.");
+
+        // Then no files should be listed, since only the original file and a hard link were found.
+
     }
 }
