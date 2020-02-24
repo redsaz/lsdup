@@ -24,9 +24,13 @@ fn main() {
         process::exit(1);
     });
 
-    if let Err(e) = lsdup::run(&config) {
-        eprintln!("Application error: {}", e);
-
-        process::exit(1);
+    match lsdup::run(&config) {
+        Err(e) => {
+            eprintln!("Application error: {}", e);
+            process::exit(1);
+        }
+        Ok(dups) => {
+            eprintln!("{} hash groups.", dups.into_iter().len());
+        }
     }
 }

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::vec::Vec;
 
 #[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq)]
-struct LenHash {
+pub struct LenHash {
     len: u64,
     hash: [u8; 32],
 }
@@ -89,7 +89,7 @@ trait FileVisitor {
     fn visit(&mut self, file: PathBuf);
 }
 
-struct AllInFileVisitor {
+pub struct AllInFileVisitor {
     // The first file for the size is stored here. If another file with
     // the same size comes along, then the first file will get hashed,
     // And the Some is replaced with None. Then the second file is hashed.
@@ -202,7 +202,7 @@ impl<'a> IntoIterator for &'a AllInFileVisitor {
     }
 }
 
-pub fn run(config: &Config) -> io::Result<()> {
+pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
     let dir = Path::new(&config.dir);
     let mut dups = AllInFileVisitor::new();
     eprintln!("Analyzing for {:?}...", dir);
@@ -220,7 +220,7 @@ pub fn run(config: &Config) -> io::Result<()> {
         }
     }
 
-    Ok(())
+    Ok(dups)
 }
 
 // If this file is a hardlink, then return true.
