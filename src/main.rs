@@ -30,7 +30,7 @@ fn main() {
             process::exit(1);
         }
         Ok(dups) => {
-            eprintln!("{} hash groups.", dups.into_iter().len());
+            eprintln!("{} hash groups.", dups.into_iter().count());
         }
     }
 }

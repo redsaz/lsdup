@@ -105,6 +105,12 @@ pub struct AllInFileVisitor {
     // hardlinks as duplicate. Also we don't want to hash two or more times
     // if we know its all pointing to the same data.
     hardlinks_map: BTreeMap<DevIno, LinkedFile>,
+
+    // Total bytes of all the files processed.
+    total_file_bytes: u64,
+
+    // Total number of files processed.
+    num_files: u32,
 }
 
 impl AllInFileVisitor {
@@ -113,6 +119,8 @@ impl AllInFileVisitor {
             size_firstfile_map: BTreeMap::new(),
             hash_files_map: BTreeMap::new(),
             hardlinks_map: BTreeMap::new(),
+            total_file_bytes: 0,
+            num_files: 0,
         }
     }
 }
@@ -155,11 +163,13 @@ impl FileVisitor for AllInFileVisitor {
                         // }
                         return;
                     } else {
-                        let len = meta.len();
-                        let files = LinkedFile::init(len, file.to_owned());
+                        let files = LinkedFile::init(size, file.to_owned());
                         self.hardlinks_map.insert(inode, files);
                     }
                 }
+
+                self.total_file_bytes += size;
+                self.num_files += 1;
 
                 let e = self.size_firstfile_map.get(&size);
                 // If there is already an entry for the given size...
@@ -195,11 +205,15 @@ impl FileVisitor for AllInFileVisitor {
 
 impl<'a> IntoIterator for &'a AllInFileVisitor {
     type Item = (&'a LenHash, &'a std::vec::Vec<PathBuf>);
-    type IntoIter = std::collections::btree_map::Iter<'a, LenHash, std::vec::Vec<PathBuf>>;
+    type IntoIter = std::iter::Filter<std::collections::btree_map::Iter<'a, LenHash, std::vec::Vec<PathBuf>>, for<'r> fn(&'r (&LenHash, &std::vec::Vec<std::path::PathBuf>)) -> bool>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.hash_files_map.iter()
+        self.hash_files_map.iter().filter(only_with_dupes)
     }
+}
+
+fn only_with_dupes<'r>(x: &'r (&LenHash, &std::vec::Vec<PathBuf>)) -> bool {
+    x.1.len() > 1
 }
 
 pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
@@ -208,17 +222,21 @@ pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
     eprintln!("Analyzing for {:?}...", dir);
     visit_dirs(dir, &mut dups);
 
+    let mut num_dups = 0;
+    let mut dup_bytes = 0;
+    let mut groups = 0;
+
     // Iterate through all of the hashed files map, return only the ones that have two or more.
     for x in &dups {
-        if x.1.len() < 2 {
-            continue;
-        }
-
         println!("\nSize: {}  Hash: {}", x.0.len(), x.0.to_hex());
         for y in x.1 {
             println!("{}", y.to_string_lossy());
         }
+        num_dups += x.1.len() - 1;
+        dup_bytes += (x.1.len() - 1) * (x.0.len() as usize);
     }
+    eprintln!("{} files, {} bytes analyzed.", &dups.num_files, &dups.total_file_bytes);
+    eprintln!("{} duplicate files, {} total duplicate bytes.", &num_dups, &dup_bytes);
 
     Ok(dups)
 }
