@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::vec::Vec;
 
-#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq)]
+#[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::fmt::Debug)]
 pub struct LenHash {
     len: u64,
     hash: [u8; 32],
@@ -55,7 +55,12 @@ impl PartialOrd for LenHash {
 
 // Device+Inode number are used to identify hard linked data.
 #[derive(
-    std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::cmp::Ord, std::cmp::PartialOrd,
+    std::hash::Hash,
+    std::cmp::Eq,
+    std::cmp::PartialEq,
+    std::cmp::Ord,
+    std::cmp::PartialOrd,
+    std::fmt::Debug,
 )]
 struct DevIno {
     dev: u64,
@@ -71,6 +76,7 @@ impl DevIno {
 }
 
 // len, hash, and first file.
+#[derive(std::fmt::Debug)]
 struct LinkedFile {
     len: u64,
     hash: Option<[u8; 32]>,
@@ -89,6 +95,7 @@ trait FileVisitor {
     fn visit(&mut self, file: PathBuf);
 }
 
+#[derive(std::fmt::Debug)]
 pub struct AllInFileVisitor {
     // The first file for the size is stored here. If another file with
     // the same size comes along, then the first file will get hashed,
@@ -205,7 +212,10 @@ impl FileVisitor for AllInFileVisitor {
 
 impl<'a> IntoIterator for &'a AllInFileVisitor {
     type Item = (&'a LenHash, &'a std::vec::Vec<PathBuf>);
-    type IntoIter = std::iter::Filter<std::collections::btree_map::Iter<'a, LenHash, std::vec::Vec<PathBuf>>, for<'r> fn(&'r (&LenHash, &std::vec::Vec<std::path::PathBuf>)) -> bool>;
+    type IntoIter = std::iter::Filter<
+        std::collections::btree_map::Iter<'a, LenHash, std::vec::Vec<PathBuf>>,
+        for<'r> fn(&'r (&LenHash, &std::vec::Vec<std::path::PathBuf>)) -> bool,
+    >;
 
     fn into_iter(self) -> Self::IntoIter {
         self.hash_files_map.iter().filter(only_with_dupes)
@@ -218,13 +228,14 @@ fn only_with_dupes<'r>(x: &'r (&LenHash, &std::vec::Vec<PathBuf>)) -> bool {
 
 pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
     let dir = Path::new(&config.dir);
-    let mut dups = AllInFileVisitor::new();
     eprintln!("Analyzing for {:?}...", dir);
-    visit_dirs(dir, &mut dups);
+    let mut dups = AllInFileVisitor::new();
+    if let Err(foo) = visit_dirs(dir, &mut dups) {
+        return Err(foo);
+    }
 
     let mut num_dups = 0;
     let mut dup_bytes = 0;
-    let mut groups = 0;
 
     // Iterate through all of the hashed files map, return only the ones that have two or more.
     for x in &dups {
@@ -235,8 +246,14 @@ pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
         num_dups += x.1.len() - 1;
         dup_bytes += (x.1.len() - 1) * (x.0.len() as usize);
     }
-    eprintln!("{} files, {} bytes analyzed.", &dups.num_files, &dups.total_file_bytes);
-    eprintln!("{} duplicate files, {} total duplicate bytes.", &num_dups, &dup_bytes);
+    eprintln!(
+        "{} files, {} bytes analyzed.",
+        &dups.num_files, &dups.total_file_bytes
+    );
+    eprintln!(
+        "{} duplicate files, {} total duplicate bytes.",
+        &num_dups, &dup_bytes
+    );
 
     Ok(dups)
 }
@@ -278,38 +295,30 @@ fn hash_contents_mmap(size: u64, file: &File) -> LenHash {
     LenHash::from(size, hasher.finalize().into())
 }
 
-fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) {
-    if dir.is_dir() {
-        match fs::read_dir(dir) {
-            Ok(dir_iter) => {
-                for entry in dir_iter {
-                    match entry {
-                        Ok(entry) => {
-                            let path = entry.path();
-                            match entry.metadata() {
-                                Ok(metadata) => {
-                                    if path.is_dir() && metadata.is_dir() {
-                                        visit_dirs(&path, visitor);
-                                    } else if metadata.is_file() {
-                                        visitor.visit(path);
-                                    } else {
-                                        eprintln!("I'm not sure what this is: {:?}", path);
-                                    }
-                                }
-                                Err(e) => eprintln!("Skipping {:?}.\nReason: {}", entry, e),
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Skipping entry in directory {:?}.\nReason: {}", dir, e)
+fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) -> io::Result<()> {
+    let dir_iter = fs::read_dir(dir)?;
+    for entry in dir_iter {
+        match entry {
+            Ok(entry) => {
+                let path = entry.path();
+                match entry.metadata() {
+                    Ok(metadata) => {
+                        // Only visit real (non-symlinked) directories
+                        if path.is_dir() && metadata.is_dir() {
+                            visit_dirs(&path, visitor)?;
+                        } else if metadata.is_file() {
+                            visitor.visit(path);
+                        } else {
+                            eprintln!("Skipping this, which is neither a directory nor a file: {:?}", path);
                         }
                     }
+                    Err(e) => eprintln!("Skipping {:?}.\nReason: {}", entry, e),
                 }
             }
-            Err(e) => {
-                eprintln!("Skipping directory {:?}.\nReason: {}", dir, e);
-            }
+            Err(e) => eprintln!("Skipping entry in directory {:?}.\nReason: {}", dir, e),
         }
     }
+    Ok(())
 }
 
 pub struct Config {
@@ -377,7 +386,76 @@ mod tests {
     }
 
     #[test]
-    fn hard_link() {
+    fn test_run_one_file() {
+        // Given a directory with one file,
+        let target_dir = Path::new("./target/test_dir/one_file");
+        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                panic!("Problem creating directory: {:?}", error);
+            }
+        });
+
+        let orig_path = target_dir.join(Path::new("a.txt"));
+        {
+            let mut original = File::create(&orig_path).unwrap();
+            original
+                .write_all(b"Contents for a test of one file.")
+                .expect("Could not write data for file.");
+        }
+
+        // and the configuration is to analyze that directory,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        let dupes = run(&config).expect("Could not analyze directory.");
+
+        // Then no files should be listed, since a directory with one file cannot have a dupe.
+        assert_eq!(0, dupes.into_iter().count());
+    }
+
+    #[test]
+    fn test_run_bogus_dir() {
+        // Given a directory that doesn't exist,
+        let target_dir = Path::new("./target/test_dir/bogus_dir");
+
+        // and the configuration is to analyze that directory,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        // Then an error is returned indicating the directory is not found.
+        let err = run(&config)
+            .expect_err("Should error when attempting to analyze a non-existing directory.");
+        assert_eq![io::ErrorKind::NotFound, err.kind()]
+    }
+
+    #[test]
+    fn test_run_zero_files() {
+        // Given a directory with zero files,
+        let target_dir = Path::new("./target/test_dir/zero_files");
+        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                panic!("Problem creating directory: {:?}", error);
+            }
+        });
+
+        // and the configuration is to analyze that directory,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        let dupes = run(&config).expect("Could not analyze directory.");
+
+        // Then no files should be listed, since a directory with zero files cannot have a dupe.
+        assert_eq!(0, dupes.into_iter().count());
+    }
+
+    #[test]
+    fn test_run_hard_link() {
         // Given a directory with two files,
         // and one file has original data,
         let target_dir = Path::new("./target/test_dir/hard_links");
@@ -389,8 +467,10 @@ mod tests {
 
         let orig_path = target_dir.join(Path::new("a.txt"));
         {
-        let mut original = File::create(&orig_path).unwrap();
-        original.write_all(b"Contents for non-duplicated data. kjhkjh").expect("Could not write data for file.");
+            let mut original = File::create(&orig_path).unwrap();
+            original
+                .write_all(b"Contents for non-duplicated data. kjhkjh")
+                .expect("Could not write data for file.");
         }
 
         // and another file is hardlinked to that data,
@@ -402,12 +482,14 @@ mod tests {
         });
 
         // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
-        let config = Config{dir: target_dir.to_string_lossy().to_string() };
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
 
         // When dupes are analyzed for that directory,
-        run(&config).expect("Could not analyze directory.");
+        let dupes = run(&config).expect("Could not analyze directory.");
 
         // Then no files should be listed, since only the original file and a hard link were found.
-
+        assert_eq!(0, dupes.into_iter().count());
     }
 }
