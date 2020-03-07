@@ -387,15 +387,19 @@ mod tests {
         // );
     }
 
-    #[test]
-    fn test_run() {
-        // Given a directory with two files,
-        let target_dir = Path::new("./target/test_dir/two_files");
-        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
+    fn create_dir_all(target_dir: &Path) {
+        std::fs::create_dir_all(target_dir).unwrap_or_else(|error| {
             if error.kind() != io::ErrorKind::AlreadyExists {
                 panic!("Problem creating directory: {:?}", error);
             }
         });
+    }
+
+    #[test]
+    fn test_run() {
+        // Given a directory with two files,
+        let target_dir = Path::new("./target/test_dir/two_files");
+        create_dir_all(target_dir);
 
         // and both files are identical,
         let orig_path = target_dir.join(Path::new("a.txt"));
@@ -432,11 +436,7 @@ mod tests {
     fn test_run_one_file() {
         // Given a directory with one file,
         let target_dir = Path::new("./target/test_dir/one_file");
-        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                panic!("Problem creating directory: {:?}", error);
-            }
-        });
+        create_dir_all(target_dir);
 
         let orig_path = target_dir.join(Path::new("a.txt"));
         {
@@ -459,6 +459,24 @@ mod tests {
     }
 
     #[test]
+    fn test_run_zero_files() {
+        // Given a directory with zero files,
+        let target_dir = Path::new("./target/test_dir/zero_files");
+        create_dir_all(target_dir);
+
+        // and the configuration is to analyze that directory,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        let dupes = run(&config).expect("Could not analyze directory.");
+
+        // Then no files should be listed, since a directory with zero files cannot have a dupe.
+        assert_eq!(0, dupes.into_iter().count());
+    }
+
+    #[test]
     fn test_run_bogus_dir() {
         // Given a directory that doesn't exist,
         let target_dir = Path::new("./target/test_dir/bogus_dir");
@@ -476,36 +494,10 @@ mod tests {
     }
 
     #[test]
-    fn test_run_zero_files() {
-        // Given a directory with zero files,
-        let target_dir = Path::new("./target/test_dir/zero_files");
-        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                panic!("Problem creating directory: {:?}", error);
-            }
-        });
-
-        // and the configuration is to analyze that directory,
-        let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
-        };
-
-        // When dupes are analyzed for that directory,
-        let dupes = run(&config).expect("Could not analyze directory.");
-
-        // Then no files should be listed, since a directory with zero files cannot have a dupe.
-        assert_eq!(0, dupes.into_iter().count());
-    }
-
-    #[test]
     fn test_run_non_dir_path() {
         // Given a file instead of a directory,
         let target_dir = Path::new("./target/test_dir/non_dir_path");
-        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                panic!("Problem creating directory: {:?}", error);
-            }
-        });
+        create_dir_all(target_dir);
 
         let non_dir_path = target_dir.join(Path::new("non_dir"));
         {
@@ -532,11 +524,7 @@ mod tests {
         // Given a directory with two files,
         // and one file has original data,
         let target_dir = Path::new("./target/test_dir/hard_links");
-        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                panic!("Problem creating directory: {:?}", error);
-            }
-        });
+        create_dir_all(target_dir);
 
         let orig_path = target_dir.join(Path::new("a.txt"));
         {
@@ -567,21 +555,77 @@ mod tests {
     }
 
     #[test]
+    fn test_run_hard_links_dupes() {
+        // Given a directory with four files files,
+        // and one file has original data,
+        let target_dir = Path::new("./target/test_dir/hard_links_dupes");
+        create_dir_all(target_dir);
+
+        let orig_path = target_dir.join(Path::new("a.txt"));
+        let data = b"Contents for non-duplicated data. zcvzxcv";
+        {
+            let mut original = File::create(&orig_path).unwrap();
+            original
+                .write_all(data)
+                .expect("Could not write data for file.");
+        }
+
+        // and another file is hardlinked to that data,
+        let hlink_path = target_dir.join(Path::new("a-hardlink.txt"));
+        std::fs::hard_link(&orig_path, &hlink_path).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                panic!("Problem creating hardlink: {:?}", error);
+            }
+        });
+
+        // and a third file has the same contents as the first file, but isn't hard linked to it,
+        let dupe_path = target_dir.join(Path::new("b.txt"));
+        {
+            let mut duplicate = File::create(&dupe_path).unwrap();
+            duplicate
+                .write_all(data)
+                .expect("Could not write data for file.");
+        }
+
+        // and a fourth file is hardlinked to that data,
+        let dupe_hlink_path = target_dir.join(Path::new("b-hardlink.txt"));
+        std::fs::hard_link(&dupe_path, &dupe_hlink_path).unwrap_or_else(|error| {
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                panic!("Problem creating hardlink: {:?}", error);
+            }
+        });
+
+        // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        let dupes = run(&config).expect("Could not analyze directory.");
+
+        // Then there should be a duplicates group listing the first file as the original and the
+        // third file as a duplicate
+        assert_eq!(1, dupes.into_iter().count());
+        let mut iter = dupes.into_iter();
+        let group = iter.next().unwrap();
+        assert_eq!(2, group.1.len());
+        assert_eq!(orig_path.as_path(), group.1[0].as_path());
+        assert_eq!(dupe_path.as_path(), group.1[1].as_path());
+        assert!(iter.next().is_none(), "Only one dupe group should exist.");
+    }
+
+    #[test]
     fn test_run_symlink() {
         // Given a directory with two files,
         // and one file has original data,
-        let target_dir = Path::new("./target/test_dir/hard_links");
-        std::fs::create_dir(target_dir).unwrap_or_else(|error| {
-            if error.kind() != io::ErrorKind::AlreadyExists {
-                panic!("Problem creating directory: {:?}", error);
-            }
-        });
+        let target_dir = Path::new("./target/test_dir/soft_links");
+        create_dir_all(target_dir);
 
         let orig_path = target_dir.join(Path::new("a.txt"));
         {
             let mut original = File::create(&orig_path).unwrap();
             original
-                .write_all(b"Contents for non-duplicated data. kjhkjh")
+                .write_all(b"Contents for non-duplicated data. qwelkrj")
                 .expect("Could not write data for file.");
         }
 
