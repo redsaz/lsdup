@@ -410,7 +410,8 @@ mod tests {
                 .expect("Could not write data for file.");
         }
         let dupe_path = target_dir.join(Path::new("b.txt"));
-        let _ = std::fs::copy(orig_path.as_path(), dupe_path.as_path()).expect("Could not write data for file.");
+        let _ = std::fs::copy(orig_path.as_path(), dupe_path.as_path())
+            .expect("Could not write data for file.");
 
         // and the configuration is to analyze that directory,
         let config = Config {
@@ -430,6 +431,76 @@ mod tests {
         assert_eq!(orig_path.as_path(), group.1[0].as_path());
         assert_eq!(dupe_path.as_path(), group.1[1].as_path());
         assert!(iter.next().is_none(), "Only one dupe group should exist.");
+    }
+
+    #[test]
+    fn test_run_two_original_files_different_length() {
+        // Given a directory with two files,
+        let target_dir = Path::new("./target/test_dir/two_files_different_length");
+        create_dir_all(target_dir);
+
+        // and both files are different content and length,
+        let orig1_path = target_dir.join(Path::new("a.txt"));
+        {
+            let mut original = File::create(&orig1_path).unwrap();
+            original
+                .write_all(b"Contents for a test of two files of different content. Both have different sizes as well. 1sdoerknsad")
+                .expect("Could not write data for file.");
+        }
+        let orig2_path = target_dir.join(Path::new("b.txt"));
+        {
+            let mut original = File::create(&orig2_path).unwrap();
+            original
+                .write_all(b"Contents for a test of two files of different content. Both have different sizes as well. 2sdoer")
+                .expect("Could not write data for file.");
+        }
+
+        // and the configuration is to analyze that directory,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        let dupes = run(&config).expect("Could not analyze directory.");
+
+        // Then zero groups should be listed,
+        // because both files are different.
+        assert_eq!(0, dupes.into_iter().count());
+    }
+
+    #[test]
+    fn test_run_two_original_files_same_length() {
+        // Given a directory with two files,
+        let target_dir = Path::new("./target/test_dir/two_files_same_length");
+        create_dir_all(target_dir);
+
+        // and both files are different content but same length,
+        let orig1_path = target_dir.join(Path::new("a.txt"));
+        {
+            let mut original = File::create(&orig1_path).unwrap();
+            original
+                .write_all(b"Contents for a test of two files of different content. Both have different sizes as well. 1zcn,eiudn")
+                .expect("Could not write data for file.");
+        }
+        let orig2_path = target_dir.join(Path::new("b.txt"));
+        {
+            let mut original = File::create(&orig2_path).unwrap();
+            original
+                .write_all(b"Contents for a test of two files of different content. Both have different sizes as well. 2zcn,eiudn")
+                .expect("Could not write data for file.");
+        }
+
+        // and the configuration is to analyze that directory,
+        let config = Config {
+            dir: target_dir.to_string_lossy().to_string(),
+        };
+
+        // When dupes are analyzed for that directory,
+        let dupes = run(&config).expect("Could not analyze directory.");
+
+        // Then zero groups should be listed,
+        // because both files are different.
+        assert_eq!(0, dupes.into_iter().count());
     }
 
     #[test]
@@ -618,10 +689,11 @@ mod tests {
     fn test_run_symlink() {
         // Given a directory with two files,
         // and one file has original data,
-        let target_dir = Path::new("./target/test_dir/soft_links");
+        let target_dir = Path::new("./target/test_dir/sym_links");
         create_dir_all(target_dir);
 
-        let orig_path = target_dir.join(Path::new("a.txt"));
+        let orig_file = Path::new("a.txt");
+        let orig_path = target_dir.join(&orig_file);
         {
             let mut original = File::create(&orig_path).unwrap();
             original
@@ -631,7 +703,7 @@ mod tests {
 
         // and another file is symlinked to that data,
         let hlink_path = target_dir.join(Path::new("a-symlink.txt"));
-        std::os::unix::fs::symlink(&orig_path, &hlink_path).unwrap_or_else(|error| {
+        std::os::unix::fs::symlink(&orig_file, &hlink_path).unwrap_or_else(|error| {
             if error.kind() != io::ErrorKind::AlreadyExists {
                 panic!("Problem creating symlink: {:?}", error);
             }
