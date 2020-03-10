@@ -7,6 +7,7 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::string::String;
 use std::vec::Vec;
 
 #[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::fmt::Debug)]
@@ -247,26 +248,45 @@ pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
 
 pub fn print_results(dups: &AllInFileVisitor) {
     let mut num_dups = 0;
-    let mut dup_bytes = 0;
+    let mut dup_bytes: u64 = 0;
     for x in dups {
-        println!("\nSize: {}  Hash: {}", x.0.len(), x.0.to_hex());
+        println!(
+            "\nSize: {}  Hash: {}",
+            friendly_bytes(x.0.len()),
+            x.0.to_hex()
+        );
         for y in x.1 {
             println!("{}", y.to_string_lossy());
         }
         num_dups += x.1.len() - 1;
-        dup_bytes += (x.1.len() - 1) * (x.0.len() as usize);
+        dup_bytes += (x.1.len() - 1) as u64 * (x.0.len() as u64);
     }
     eprintln!(
-        "{} files, {} bytes analyzed.",
+        "{} files, {} analyzed.",
         &dups.num_files(),
-        &dups.total_file_bytes()
+        friendly_bytes(dups.total_file_bytes())
     );
     eprintln!(
-        "{} duplicate files, {} total duplicate bytes.",
-        &num_dups, &dup_bytes
+        "{} duplicate files, {} of duplicates.",
+        &num_dups,
+        friendly_bytes(dup_bytes)
     );
 
     eprintln!("{} sets of duplicates.", dups.into_iter().count());
+}
+
+fn friendly_bytes(bytes: u64) -> String {
+    if bytes >= 1 << 30 {
+        let value = (bytes as f64) / (1024 * 1024 * 1024) as f64;
+        return format!("{:.3} GB", value);
+    } else if bytes >= 1 << 20 {
+        let value = (bytes as f64) / (1024 * 1024) as f64;
+        return format!("{:.3} MB", value);
+    } else if bytes >= 1 << 10 {
+        let value = (bytes as f64) / 1024.0;
+        return format!("{:.3} kB", value);
+    }
+    format!("{} B", bytes)
 }
 
 // If this file is a hardlink, then return true.
