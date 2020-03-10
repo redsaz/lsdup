@@ -24,13 +24,14 @@ fn main() {
         process::exit(1);
     });
 
+    eprintln!("Analyzing for {:?}...", config.dir);
     match lsdup::run(&config) {
         Err(e) => {
             eprintln!("Application error: {}", e);
             process::exit(1);
         }
         Ok(dups) => {
-            eprintln!("{} hash groups.", dups.into_iter().count());
+            lsdup::print_results(&dups);
         }
     }
 }

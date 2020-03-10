@@ -130,6 +130,14 @@ impl AllInFileVisitor {
             num_files: 0,
         }
     }
+
+    pub fn num_files(&self) -> u32 {
+        self.num_files
+    }
+
+    pub fn total_file_bytes(&self) -> u64 {
+        self.total_file_bytes
+    }
 }
 
 impl FileVisitor for AllInFileVisitor {
@@ -228,17 +236,19 @@ fn only_with_dupes<'r>(x: &'r (&LenHash, &std::vec::Vec<PathBuf>)) -> bool {
 
 pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
     let dir = Path::new(&config.dir);
-    eprintln!("Analyzing for {:?}...", dir);
     let mut dups = AllInFileVisitor::new();
+
     if let Err(foo) = visit_dirs(dir, &mut dups) {
         return Err(foo);
     }
 
+    Ok(dups)
+}
+
+pub fn print_results(dups: &AllInFileVisitor) {
     let mut num_dups = 0;
     let mut dup_bytes = 0;
-
-    // Iterate through all of the hashed files map, return only the ones that have two or more.
-    for x in &dups {
+    for x in dups {
         println!("\nSize: {}  Hash: {}", x.0.len(), x.0.to_hex());
         for y in x.1 {
             println!("{}", y.to_string_lossy());
@@ -248,14 +258,15 @@ pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
     }
     eprintln!(
         "{} files, {} bytes analyzed.",
-        &dups.num_files, &dups.total_file_bytes
+        &dups.num_files(),
+        &dups.total_file_bytes()
     );
     eprintln!(
         "{} duplicate files, {} total duplicate bytes.",
         &num_dups, &dup_bytes
     );
 
-    Ok(dups)
+    eprintln!("{} sets of duplicates.", dups.into_iter().count());
 }
 
 // If this file is a hardlink, then return true.
@@ -345,47 +356,6 @@ impl Config {
 mod tests {
     use super::*;
     use std::io::prelude::*;
-
-    #[test]
-    fn visit_dirs_test_dir() {
-        // let dir = Path::new("./target/test_dir");
-        // std::fs::remove_dir_all(dir).unwrap_or_else(|error| {
-        //     if error.kind() != io::ErrorKind::NotFound {
-        //         panic!("Problem removing old directory: {:?}", error);
-        //     }
-        // });
-
-        // std::fs::create_dir(dir).unwrap_or_else(|error| {
-        //     if error.kind() != io::ErrorKind::AlreadyExists {
-        //         panic!("Problem creating directory: {:?}", error);
-        //     }
-        // });
-
-        // let contents1 = b"Contents1";
-        // let mut dup1a = File::create(dir.join("dup1a.txt")).unwrap();
-        // dup1a.write_all(contents1).unwrap();
-        // let mut dup1b = File::create(dir.join("dup1b.txt")).unwrap();
-        // dup1b.write_all(contents1).unwrap();
-
-        // let mut out = File::open(dir.join("dup1a.txt")).unwrap();
-        // let mut buf = [0; 128 * 1024];
-        // let mut hasher = blake3::Hasher::new();
-        // loop {
-        //     let length = out.read(&mut buf).unwrap();
-        //     if length == 0 {
-        //         break;
-        //     }
-        //     hasher.update(&buf);
-        // }
-        // let hash1 = hasher.finalize();
-
-        // // let hash1 = blake3::hash(b"foobarbaz");
-        // eprintln!("hex: {}", hash1.to_hex());
-        // assert_eq!(
-        //     "fcc85134f1e140988a686dbd857f9dcf453cfbfc986f0fcfbb987a0436a1cd42",
-        //     hash1.to_hex().as_str()
-        // );
-    }
 
     fn create_dir_all(target_dir: &Path) {
         std::fs::create_dir_all(target_dir).unwrap_or_else(|error| {
