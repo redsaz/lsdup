@@ -97,7 +97,9 @@ trait FileVisitor {
 }
 
 #[derive(std::fmt::Debug)]
-pub struct AllInFileVisitor {
+pub struct AllInFileVisitor<'a> {
+    config: &'a Config,
+
     // The first file for the size is stored here. If another file with
     // the same size comes along, then the first file will get hashed,
     // And the Some is replaced with None. Then the second file is hashed.
@@ -121,9 +123,10 @@ pub struct AllInFileVisitor {
     num_files: u32,
 }
 
-impl AllInFileVisitor {
-    fn new() -> AllInFileVisitor {
+impl<'a> AllInFileVisitor<'a> {
+    fn new(config: &'a Config) -> AllInFileVisitor {
         AllInFileVisitor {
+            config,
             size_firstfile_map: BTreeMap::new(),
             hash_files_map: BTreeMap::new(),
             hardlinks_map: BTreeMap::new(),
@@ -141,7 +144,7 @@ impl AllInFileVisitor {
     }
 }
 
-impl FileVisitor for AllInFileVisitor {
+impl<'a> FileVisitor for AllInFileVisitor<'a> {
     fn visit(&mut self, file: PathBuf) {
         if let Err(e) = file.metadata() {
             eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
@@ -151,7 +154,9 @@ impl FileVisitor for AllInFileVisitor {
             Ok(meta) => {
                 let size = meta.len();
 
-                eprintln!("File: {:?} size: {}", file, size);
+                if self.config.verbose {
+                    eprintln!("File: {:?} size: {}", file, size);
+                }
 
                 // If the inode that the file points at has at least one other file
                 // pointing at it, we should treat it special so that we don't hash
@@ -194,7 +199,9 @@ impl FileVisitor for AllInFileVisitor {
                     // first, before hashing the current file.
                     if let Some(original) = inner_opt {
                         let hash = hash_contents_path(&original);
-                        eprintln!("\thash: {}", hash.to_hex());
+                        if self.config.verbose {
+                            eprintln!("\thash: {}", hash.to_hex());
+                        }
                         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
                         paths.push(original.clone());
                         // (and replace the Some with None, so it won't be hashed again)
@@ -202,7 +209,9 @@ impl FileVisitor for AllInFileVisitor {
                     }
                     // ...now hash the current file.
                     let hash = hash_contents_path(&file);
-                    eprintln!("\thash: {}", hash.to_hex());
+                    if self.config.verbose {
+                        eprintln!("\thash: {}", hash.to_hex());
+                    }
                     let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
                     paths.push(file);
                 } else {
@@ -219,7 +228,7 @@ impl FileVisitor for AllInFileVisitor {
     }
 }
 
-impl<'a> IntoIterator for &'a AllInFileVisitor {
+impl<'a> IntoIterator for &'a AllInFileVisitor<'a> {
     type Item = (&'a LenHash, &'a std::vec::Vec<PathBuf>);
     type IntoIter = std::iter::Filter<
         std::collections::btree_map::Iter<'a, LenHash, std::vec::Vec<PathBuf>>,
@@ -237,9 +246,9 @@ fn only_with_dupes<'r>(x: &'r (&LenHash, &std::vec::Vec<PathBuf>)) -> bool {
 
 pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
     let dir = Path::new(&config.dir);
-    let mut dups = AllInFileVisitor::new();
+    let mut dups = AllInFileVisitor::new(&config);
 
-    if let Err(foo) = visit_dirs(dir, &mut dups) {
+    if let Err(foo) = visit_dirs(dir, &mut dups, &config) {
         return Err(foo);
     }
 
@@ -326,7 +335,7 @@ fn hash_contents_mmap(size: u64, file: &File) -> LenHash {
     LenHash::from(size, hasher.finalize().into())
 }
 
-fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) -> io::Result<()> {
+fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor, config: &Config) -> io::Result<()> {
     let dir_iter = fs::read_dir(dir)?;
     for entry in dir_iter {
         match entry {
@@ -336,7 +345,7 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) -> io::Result<()> {
                     Ok(metadata) => {
                         // Only visit real (non-symlinked) directories
                         if path.is_dir() && metadata.is_dir() {
-                            visit_dirs(&path, visitor)?;
+                            visit_dirs(&path, visitor, config)?;
                         } else if metadata.is_file() {
                             visitor.visit(path);
                         } else {
@@ -355,8 +364,10 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor) -> io::Result<()> {
     Ok(())
 }
 
+#[derive(std::fmt::Debug)]
 pub struct Config {
     pub dir: String,
+    pub verbose: bool,
 }
 
 impl Config {
@@ -367,8 +378,9 @@ impl Config {
             Some(arg) => arg,
             None => return Err("didn't get a directory"),
         };
+        let verbose = false;
 
-        Ok(Config { dir })
+        Ok(Config { dir, verbose })
     }
 }
 
@@ -405,7 +417,7 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -447,7 +459,7 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -482,7 +494,7 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -509,7 +521,7 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -527,7 +539,7 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -544,7 +556,7 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -570,7 +582,7 @@ mod tests {
 
         // and the configuration is to analyze that file,
         let config = Config {
-            dir: non_dir_path.to_string_lossy().to_string(),
+            dir: non_dir_path.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that non-directory,
@@ -605,7 +617,7 @@ mod tests {
 
         // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -658,7 +670,7 @@ mod tests {
 
         // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,
@@ -701,7 +713,7 @@ mod tests {
 
         // and the configuration is to analyze that directory, not inspecting symlinked files or directories,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(),
+            dir: target_dir.to_string_lossy().to_string(), verbose: false
         };
 
         // When dupes are analyzed for that directory,

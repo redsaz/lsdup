@@ -24,7 +24,9 @@ fn main() {
         process::exit(1);
     });
 
-    eprintln!("Analyzing for {:?}...", config.dir);
+    if config.verbose {
+        eprintln!("Analyzing for {:?}...", config.dir);
+    }
     match lsdup::run(&config) {
         Err(e) => {
             eprintln!("Application error: {}", e);
