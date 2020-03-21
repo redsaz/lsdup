@@ -1,7 +1,6 @@
 use arrayvec::ArrayString;
 use memmap::MmapOptions;
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::fs::File;
 use std::io;
@@ -9,6 +8,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::string::String;
 use std::vec::Vec;
+use clap::{Arg, App};
 
 #[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::fmt::Debug)]
 pub struct LenHash {
@@ -154,7 +154,7 @@ impl<'a> FileVisitor for AllInFileVisitor<'a> {
             Ok(meta) => {
                 let size = meta.len();
 
-                if self.config.verbose {
+                if self.config.verbosity > 0 {
                     eprintln!("File: {:?} size: {}", file, size);
                 }
 
@@ -199,7 +199,7 @@ impl<'a> FileVisitor for AllInFileVisitor<'a> {
                     // first, before hashing the current file.
                     if let Some(original) = inner_opt {
                         let hash = hash_contents_path(&original);
-                        if self.config.verbose {
+                        if self.config.verbosity > 0 {
                             eprintln!("\thash: {}", hash.to_hex());
                         }
                         let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
@@ -209,7 +209,7 @@ impl<'a> FileVisitor for AllInFileVisitor<'a> {
                     }
                     // ...now hash the current file.
                     let hash = hash_contents_path(&file);
-                    if self.config.verbose {
+                    if self.config.verbosity > 0{
                         eprintln!("\thash: {}", hash.to_hex());
                     }
                     let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
@@ -287,13 +287,13 @@ pub fn print_results(dups: &AllInFileVisitor) {
 fn friendly_bytes(bytes: u64) -> String {
     if bytes >= 1 << 30 {
         let value = (bytes as f64) / (1024 * 1024 * 1024) as f64;
-        return format!("{:.3} GB", value);
+        return format!("{:.1} GB", value);
     } else if bytes >= 1 << 20 {
         let value = (bytes as f64) / (1024 * 1024) as f64;
-        return format!("{:.3} MB", value);
+        return format!("{:.1} MB", value);
     } else if bytes >= 1 << 10 {
         let value = (bytes as f64) / 1024.0;
-        return format!("{:.3} kB", value);
+        return format!("{:.1} kB", value);
     }
     format!("{} B", bytes)
 }
@@ -367,20 +367,31 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor, config: &Config) -> io:
 #[derive(std::fmt::Debug)]
 pub struct Config {
     pub dir: String,
-    pub verbose: bool,
+    pub verbosity: u8,
 }
 
 impl Config {
-    pub fn new(args: &mut env::Args) -> Result<Config, &'static str> {
-        args.next(); // Skip the executable name
+    pub fn new() -> Result<Config, &'static str> {
+        let matches = App::new("List Duplicates")
+            .version("0.1.0")
+            .author("redsaz <redsaz@gmail.com>")
+            .about("Finds files with duplicate contents")
+            .arg(Arg::with_name("DIR").help("The directory to scan").index(1))
+            .arg(
+                Arg::with_name("verbose")
+                    .short("v")
+                    .long("verbose")
+                    .multiple(true)
+                    .help("Sets the level of verbosity, repeat for more verbosity"),
+            )
+            .get_matches();
 
-        let dir = match args.next() {
-            Some(arg) => arg,
-            None => return Err("didn't get a directory"),
-        };
-        let verbose = false;
+        let dir = String::from(matches.value_of("DIR").unwrap_or("."));
+        println!("Value for dir: {}", dir);
 
-        Ok(Config { dir, verbose })
+        let verbosity = matches.occurrences_of("verbose") as u8;
+
+        Ok(Config { dir, verbosity })
     }
 }
 
@@ -417,7 +428,8 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -459,7 +471,8 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -494,7 +507,8 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -521,7 +535,8 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -539,7 +554,8 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -556,7 +572,8 @@ mod tests {
 
         // and the configuration is to analyze that directory,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -582,7 +599,8 @@ mod tests {
 
         // and the configuration is to analyze that file,
         let config = Config {
-            dir: non_dir_path.to_string_lossy().to_string(), verbose: false
+            dir: non_dir_path.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that non-directory,
@@ -617,7 +635,8 @@ mod tests {
 
         // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -670,7 +689,8 @@ mod tests {
 
         // and the configuration is to analyze that directory, not listing hardlinks as duplicates,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
@@ -713,7 +733,8 @@ mod tests {
 
         // and the configuration is to analyze that directory, not inspecting symlinked files or directories,
         let config = Config {
-            dir: target_dir.to_string_lossy().to_string(), verbose: false
+            dir: target_dir.to_string_lossy().to_string(),
+            verbosity: 0,
         };
 
         // When dupes are analyzed for that directory,
