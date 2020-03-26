@@ -1,4 +1,5 @@
 use arrayvec::ArrayString;
+use clap::{App, Arg};
 use memmap::MmapOptions;
 use std::collections::BTreeMap;
 use std::fs;
@@ -8,7 +9,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::string::String;
 use std::vec::Vec;
-use clap::{Arg, App};
 
 #[derive(std::hash::Hash, std::cmp::Eq, std::cmp::PartialEq, std::fmt::Debug)]
 pub struct LenHash {
@@ -69,9 +69,18 @@ struct DevIno {
 }
 
 impl DevIno {
+    #[cfg(target_family = "unix")]
     pub fn from(meta: &dyn std::os::unix::fs::MetadataExt) -> DevIno {
         let dev = meta.dev();
         let ino = meta.ino();
+        DevIno { dev, ino }
+    }
+
+    #[cfg(target_family = "windows")]
+    pub fn from(meta: &fs::Metadata) -> DevIno {
+        // Don't worry, I know this is horrible.
+        let dev = 0;
+        let ino = 0;
         DevIno { dev, ino }
     }
 }
@@ -209,7 +218,7 @@ impl<'a> FileVisitor for AllInFileVisitor<'a> {
                     }
                     // ...now hash the current file.
                     let hash = hash_contents_path(&file);
-                    if self.config.verbosity > 0{
+                    if self.config.verbosity > 0 {
                         eprintln!("\thash: {}", hash.to_hex());
                     }
                     let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
@@ -299,8 +308,16 @@ fn friendly_bytes(bytes: u64) -> String {
 }
 
 // If this file is a hardlink, then return true.
+#[cfg(target_family = "unix")]
 fn has_hardlinks(meta: &dyn std::os::unix::fs::MetadataExt) -> bool {
     meta.nlink() > 1
+}
+
+// If this file is a hardlink, then return true.
+#[cfg(target_family = "windows")]
+fn has_hardlinks(meta: &fs::Metadata) -> bool {
+    // This is possible in Windows, but for now skip it.
+    false
 }
 
 fn hash_contents_path(file: &Path) -> LenHash {
@@ -345,12 +362,14 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor, config: &Config) -> io:
                     Ok(metadata) => {
                         // Only visit real (non-symlinked) directories
                         if path.is_dir() && metadata.is_dir() {
-                            visit_dirs(&path, visitor, config)?;
+                            if let Err(e) = visit_dirs(&path, visitor, config) {
+                                eprintln!("Skipping directory {:?}.\nReason: {}", path, e);
+                            }
                         } else if metadata.is_file() {
                             visitor.visit(path);
                         } else {
                             eprintln!(
-                                "Skipping this, which is neither a directory nor a file: {:?}",
+                                "Skipping {:?}. It is not a directory or regular file.",
                                 path
                             );
                         }
@@ -610,6 +629,7 @@ mod tests {
         assert_eq!(io::ErrorKind::Other, err.kind());
     }
 
+    #[cfg(target_family = "unix")]
     #[test]
     fn test_run_hard_link() {
         // Given a directory with two files,
@@ -646,6 +666,7 @@ mod tests {
         assert_eq!(0, dupes.into_iter().count());
     }
 
+    #[cfg(target_family = "unix")]
     #[test]
     fn test_run_hard_links_dupes() {
         // Given a directory with four files files,
@@ -706,7 +727,7 @@ mod tests {
         assert_eq!(dupe_path.as_path(), group.1[1].as_path());
         assert!(iter.next().is_none(), "Only one dupe group should exist.");
     }
-
+    #[cfg(target_family = "unix")]
     #[test]
     fn test_run_symlink() {
         // Given a directory with two files,
