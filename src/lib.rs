@@ -406,7 +406,6 @@ impl Config {
             .get_matches();
 
         let dir = String::from(matches.value_of("DIR").unwrap_or("."));
-        println!("Value for dir: {}", dir);
 
         let verbosity = matches.occurrences_of("verbose") as u8;
 
