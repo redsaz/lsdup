@@ -207,22 +207,35 @@ impl<'a> FileVisitor for AllInFileVisitor<'a> {
                     // ...and there is already a file with the given byte size, then hash that file
                     // first, before hashing the current file.
                     if let Some(original) = inner_opt {
-                        let hash = hash_contents_path(&original);
-                        if self.config.verbosity > 0 {
-                            eprintln!("\thash: {}", hash.to_hex());
+                        match hash_contents_path(&original) {
+                            Ok(hash) => {
+                                if self.config.verbosity > 0 {
+                                    eprintln!("\thash: {}", hash.to_hex());
+                                }
+                                let paths =
+                                    self.hash_files_map.entry(hash).or_insert_with(Vec::new);
+                                paths.push(original.clone());
+                                // (and replace the Some with None, so it won't be hashed again)
+                                self.size_firstfile_map.insert(size, None);
+                            }
+                            Err(e) => {
+                                eprintln!("Error: Could not hash {:?}: {}", original, e);
+                            }
                         }
-                        let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
-                        paths.push(original.clone());
-                        // (and replace the Some with None, so it won't be hashed again)
-                        self.size_firstfile_map.insert(size, None);
                     }
                     // ...now hash the current file.
-                    let hash = hash_contents_path(&file);
-                    if self.config.verbosity > 0 {
-                        eprintln!("\thash: {}", hash.to_hex());
+                    match hash_contents_path(&file) {
+                        Ok(hash) => {
+                            if self.config.verbosity > 0 {
+                                eprintln!("\thash: {}", hash.to_hex());
+                            }
+                            let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
+                            paths.push(file);
+                        }
+                        Err(e) => {
+                            eprintln!("Error: Could not hash {:?}: {}", file, e);
+                        }
                     }
-                    let paths = self.hash_files_map.entry(hash).or_insert_with(Vec::new);
-                    paths.push(file);
                 } else {
                     // Since there isn't an entry for the given size, that means this is the first
                     // file with that size. Put it in the size map so that if another file with the
@@ -320,9 +333,9 @@ fn has_hardlinks(meta: &fs::Metadata) -> bool {
     false
 }
 
-fn hash_contents_path(file: &Path) -> LenHash {
-    let file = File::open(file).expect("Could not open file for reading.");
-    let size = file.metadata().expect("Could not get file size.").len();
+fn hash_contents_path(file: &Path) -> io::Result<LenHash> {
+    let file = File::open(file)?;
+    let size = file.metadata()?.len();
 
     if size >= 16384 && size <= isize::max_value() as u64 {
         hash_contents_mmap(size, &file)
@@ -331,25 +344,21 @@ fn hash_contents_path(file: &Path) -> LenHash {
     }
 }
 
-fn hash_contents_file(size: u64, file: File) -> LenHash {
+fn hash_contents_file(size: u64, file: File) -> io::Result<LenHash> {
     let mut file = file;
     let mut hasher = blake3::Hasher::new();
-    std::io::copy(&mut file, &mut hasher).expect("Could not hash file contents.");
+    std::io::copy(&mut file, &mut hasher)?;
 
-    LenHash::from(size, hasher.finalize().into())
+    Ok(LenHash::from(size, hasher.finalize().into()))
 }
 
-fn hash_contents_mmap(size: u64, file: &File) -> LenHash {
-    let mmap = unsafe {
-        MmapOptions::new()
-            .map(&file)
-            .expect("Could not memmap file.")
-    };
+fn hash_contents_mmap(size: u64, file: &File) -> io::Result<LenHash> {
+    let mmap = unsafe { MmapOptions::new().map(&file)? };
 
     let mut hasher = blake3::Hasher::new();
     hasher.update(&mmap);
 
-    LenHash::from(size, hasher.finalize().into())
+    Ok(LenHash::from(size, hasher.finalize().into()))
 }
 
 fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor, config: &Config) -> io::Result<()> {
