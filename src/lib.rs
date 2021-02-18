@@ -1,6 +1,8 @@
 use arrayvec::ArrayString;
 use clap::{App, Arg};
 use memmap::MmapOptions;
+use console::Term;
+use indicatif::ProgressBar;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
@@ -130,6 +132,12 @@ pub struct AllInFileVisitor<'a> {
 
     // Total number of files processed.
     num_files: u32,
+
+    // Displays progress/stats if attached to a terminal
+    progress_bar: ProgressBar,
+
+    // Allows printing if actually a terminal
+    term: Term,
 }
 
 impl<'a> AllInFileVisitor<'a> {
@@ -141,6 +149,8 @@ impl<'a> AllInFileVisitor<'a> {
             hardlinks_map: BTreeMap::new(),
             total_file_bytes: 0,
             num_files: 0,
+            progress_bar: ProgressBar::new_spinner(),
+            term: console::Term::stderr(),
         }
     }
 
@@ -155,6 +165,20 @@ impl<'a> AllInFileVisitor<'a> {
 
 impl<'a> FileVisitor for AllInFileVisitor<'a> {
     fn visit(&mut self, file: PathBuf) {
+        if self.term.features().is_attended() {
+            let width = self.term.size_checked().unwrap_or((25,40)).1 as usize;
+            let msg = file.to_str().unwrap_or("<invalid utf8>");
+            if width > 4 && msg.len() >= width - 3 {
+                for i in (0..(width - 3)).rev() {
+                    if msg.is_char_boundary(i) {
+                        self.progress_bar.set_message(msg.get(..i).unwrap_or(""));
+                        break;
+                    }
+                }
+            } else {
+                self.progress_bar.set_message(msg);
+            }
+        }
         if let Err(e) = file.metadata() {
             eprintln!("Error: Could not get metadata for {:?}: {}", file, e);
             return;
