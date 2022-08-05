@@ -431,7 +431,7 @@ impl Config {
             .arg(Arg::with_name("DIR").help("The directory to scan").index(1))
             .arg(
                 Arg::with_name("verbose")
-                    .short("v")
+                    .short('v')
                     .long("verbose")
                     .multiple(true)
                     .help("Sets the level of verbosity, repeat for more verbosity"),
