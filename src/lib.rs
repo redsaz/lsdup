@@ -27,7 +27,7 @@ impl LenHash {
         self.len
     }
 
-    pub fn to_hex(&self) -> ArrayString<[u8; 32 * 2]> {
+    pub fn to_hex(&self) -> ArrayString<64> {
         // As done in Blake3 to_hex function.
         let mut s = ArrayString::new();
         let table = b"0123456789abcdef";
