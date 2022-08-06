@@ -430,7 +430,13 @@ impl Config {
             .version("0.1.0")
             .author("redsaz <redsaz@gmail.com>")
             .about("Finds files with duplicate contents")
-            .arg(Arg::with_name("DIR").help("The directory to scan").index(1))
+            .arg(
+                Arg::with_name("DIR")
+                    .help("The directory to scan")
+                    .multiple(true)
+                    .last(true)
+                    .default_value("."),
+            )
             .arg(
                 Arg::with_name("verbose")
                     .short('v')
@@ -440,8 +446,14 @@ impl Config {
             )
             .get_matches();
 
-        let dir = PathBuf::from(matches.value_of("DIR").unwrap_or("."));
-        let dirs = Vec::from([dir]);
+        let val_strings = matches
+            .get_many::<String>("DIR")
+            .map(|vals| vals.collect::<Vec<_>>())
+            .unwrap_or_default();
+        let dirs = val_strings
+            .into_iter()
+            .map(|val| PathBuf::from(val))
+            .collect();
 
         let verbosity = matches.occurrences_of("verbose") as u8;
 
