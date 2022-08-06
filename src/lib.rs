@@ -291,7 +291,7 @@ fn only_with_dupes<'r>(x: &'r (&LenHash, &std::vec::Vec<PathBuf>)) -> bool {
 }
 
 pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
-    let dir = Path::new(&config.dir);
+    let dir = &config.dir;
     let mut dups = AllInFileVisitor::new(&config);
 
     if let Err(foo) = visit_dirs(dir, &mut dups, &config) {
@@ -418,7 +418,7 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor, config: &Config) -> io:
 
 #[derive(std::fmt::Debug)]
 pub struct Config {
-    pub dir: String,
+    pub dir: PathBuf,
     pub verbosity: u8,
 }
 
@@ -438,7 +438,7 @@ impl Config {
             )
             .get_matches();
 
-        let dir = String::from(matches.value_of("DIR").unwrap_or("."));
+        let dir = PathBuf::from(matches.value_of("DIR").unwrap_or("."));
 
         let verbosity = matches.occurrences_of("verbose") as u8;
 
