@@ -1,8 +1,8 @@
 use arrayvec::ArrayString;
 use clap::{App, Arg};
-use memmap::MmapOptions;
 use console::Term;
 use indicatif::ProgressBar;
+use memmap::MmapOptions;
 use std::collections::BTreeMap;
 use std::fs;
 use std::fs::File;
@@ -166,7 +166,7 @@ impl<'a> AllInFileVisitor<'a> {
 impl<'a> FileVisitor for AllInFileVisitor<'a> {
     fn visit(&mut self, file: PathBuf) {
         if self.term.features().is_attended() {
-            let width = self.term.size_checked().unwrap_or((25,40)).1 as usize;
+            let width = self.term.size_checked().unwrap_or((25, 40)).1 as usize;
             let msg = file.to_str().unwrap_or("<invalid utf8>");
             if width > 4 && msg.len() >= width - 3 {
                 for i in (0..(width - 3)).rev() {
@@ -291,11 +291,13 @@ fn only_with_dupes<'r>(x: &'r (&LenHash, &std::vec::Vec<PathBuf>)) -> bool {
 }
 
 pub fn run(config: &Config) -> io::Result<AllInFileVisitor> {
-    let dir = &config.dir;
+    let dirs = &config.dirs;
     let mut dups = AllInFileVisitor::new(&config);
 
-    if let Err(foo) = visit_dirs(dir, &mut dups, &config) {
-        return Err(foo);
+    for dir in dirs {
+        if let Err(foo) = visit_dirs(dir, &mut dups, &config) {
+            return Err(foo);
+        }
     }
 
     Ok(dups)
@@ -418,7 +420,7 @@ fn visit_dirs(dir: &Path, visitor: &mut dyn FileVisitor, config: &Config) -> io:
 
 #[derive(std::fmt::Debug)]
 pub struct Config {
-    pub dir: PathBuf,
+    pub dirs: Vec<PathBuf>,
     pub verbosity: u8,
 }
 
@@ -439,10 +441,11 @@ impl Config {
             .get_matches();
 
         let dir = PathBuf::from(matches.value_of("DIR").unwrap_or("."));
+        let dirs = Vec::from([dir]);
 
         let verbosity = matches.occurrences_of("verbose") as u8;
 
-        Ok(Config { dir, verbosity })
+        Ok(Config { dirs, verbosity })
     }
 }
 

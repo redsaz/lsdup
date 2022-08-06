@@ -24,7 +24,7 @@ fn main() {
     });
 
     if config.verbosity > 0 {
-        eprintln!("Analyzing for {:?}...", config.dir);
+        eprintln!("Analyzing for {:?}...", config.dirs);
     }
     match lsdup::run(&config) {
         Err(e) => {
