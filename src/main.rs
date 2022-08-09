@@ -15,7 +15,7 @@
  */
 use std::process;
 
-use lsdup::Config;
+use lsdup::lsdup::config::Config;
 
 fn main() {
     let config = Config::new().unwrap_or_else(|err| {
